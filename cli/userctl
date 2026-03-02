@@ -1,0 +1,751 @@
+#!/usr/bin/env bash
+#
+# userctl - Linux User & Service Account Management Toolkit
+# A production-grade CLI for auditing, provisioning, and restricting
+# service accounts across Linux servers.
+#
+# Author: Saharsh Pamecha
+# License: MIT
+# Repository: https://github.com/saharshpamecha/userctl
+#
+# Usage:
+#   userctl audit [OPTIONS]        - Audit service accounts
+#   userctl apply -f users.yaml    - Provision users from config
+#   userctl restrict [OPTIONS]     - Enforce shell restrictions
+#   userctl diff -f users.yaml     - Preview changes before apply
+#   userctl report [OPTIONS]       - Generate compliance report
+#
+
+set -euo pipefail
+
+VERSION="1.0.0"
+SCRIPT_NAME="userctl"
+PASSWD_FILE="/etc/passwd"
+SHADOW_FILE="/etc/shadow"
+NON_INTERACTIVE_SHELLS=("/sbin/nologin" "/usr/sbin/nologin" "/bin/false")
+INTERACTIVE_SHELLS=("/bin/bash" "/bin/sh" "/bin/zsh" "/bin/fish" "/bin/dash" "/bin/tcsh" "/bin/csh")
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# ─────────────────────────────────────────────
+# Utility Functions
+# ─────────────────────────────────────────────
+
+log_info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
+log_success() { echo -e "${GREEN}[OK]${NC} $*"; }
+log_warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
+log_error()   { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+log_header()  { echo -e "\n${BOLD}${CYAN}═══ $* ═══${NC}\n"; }
+
+is_non_interactive_shell() {
+    local shell="$1"
+    for s in "${NON_INTERACTIVE_SHELLS[@]}"; do
+        [[ "$shell" == "$s" ]] && return 0
+    done
+    return 1
+}
+
+is_interactive_shell() {
+    local shell="$1"
+    for s in "${INTERACTIVE_SHELLS[@]}"; do
+        [[ "$shell" == "$s" ]] && return 0
+    done
+    return 1
+}
+
+is_system_user() {
+    local uid="$1"
+    [[ "$uid" -lt 1000 ]] && return 0
+    return 1
+}
+
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        log_error "This command requires root privileges. Run with sudo."
+        exit 1
+    fi
+}
+
+command_exists() {
+    command -v "$1" &>/dev/null
+}
+
+get_last_login() {
+    local username="$1"
+    if command_exists lastlog; then
+        local last
+        last=$(lastlog -u "$username" 2>/dev/null | tail -1 | awk '{print $2}')
+        if [[ "$last" == "**Never" || "$last" == "Never" ]]; then
+            echo "Never"
+        else
+            lastlog -u "$username" 2>/dev/null | tail -1 | awk '{$1=""; print $0}' | xargs
+        fi
+    else
+        echo "N/A"
+    fi
+}
+
+get_last_password_change() {
+    local username="$1"
+    if [[ -r "$SHADOW_FILE" ]]; then
+        local days
+        days=$(awk -F: -v user="$username" '$1 == user {print $3}' "$SHADOW_FILE" 2>/dev/null)
+        if [[ -n "$days" && "$days" != "0" ]]; then
+            date -d "1970-01-01 + $days days" "+%Y-%m-%d" 2>/dev/null || echo "N/A"
+        else
+            echo "Never/Unset"
+        fi
+    else
+        echo "No access"
+    fi
+}
+
+# ─────────────────────────────────────────────
+# AUDIT Command
+# ─────────────────────────────────────────────
+
+cmd_audit() {
+    local show_all=false
+    local shell_filter=""
+    local output_format="table"
+    local min_uid=0
+    local max_uid=65534
+    local show_system=false
+    local flagged_only=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --all|-a)         show_all=true; shift ;;
+            --shell|-s)       shell_filter="$2"; shift 2 ;;
+            --format|-f)      output_format="$2"; shift 2 ;;
+            --min-uid)        min_uid="$2"; shift 2 ;;
+            --max-uid)        max_uid="$2"; shift 2 ;;
+            --system)         show_system=true; shift ;;
+            --flagged)        flagged_only=true; shift ;;
+            --help|-h)        audit_usage; exit 0 ;;
+            *)                log_error "Unknown option: $1"; audit_usage; exit 1 ;;
+        esac
+    done
+
+    log_header "Service Account Audit Report"
+    echo -e "${DIM}Generated: $(date '+%Y-%m-%d %H:%M:%S %Z')${NC}"
+    echo -e "${DIM}Host: $(hostname)${NC}"
+    echo -e "${DIM}Passwd file: ${PASSWD_FILE}${NC}\n"
+
+    local total=0
+    local non_interactive=0
+    local interactive_service=0
+    local flagged=0
+    local no_home=0
+
+    if [[ "$output_format" == "table" ]]; then
+        printf "${BOLD}%-20s %-8s %-8s %-25s %-15s %-10s${NC}\n" \
+            "USERNAME" "UID" "GID" "SHELL" "LAST LOGIN" "STATUS"
+        printf '%.0s─' {1..90}
+        echo
+    fi
+
+    while IFS=: read -r username password uid gid gecos home shell; do
+        # Filter by UID range
+        [[ "$uid" -lt "$min_uid" ]] && ! $show_system && ! $show_all && continue
+        [[ "$uid" -gt "$max_uid" ]] && continue
+
+        # Skip system users unless requested
+        if is_system_user "$uid" && ! $show_system && ! $show_all; then
+            continue
+        fi
+
+        # Filter by shell if specified
+        if [[ -n "$shell_filter" ]]; then
+            [[ "$shell" != *"$shell_filter"* ]] && continue
+        fi
+
+        total=$((total + 1))
+
+        local status="OK"
+        local status_color="${GREEN}"
+
+        if is_non_interactive_shell "$shell"; then
+            non_interactive=$((non_interactive + 1))
+            status="RESTRICTED"
+            status_color="${GREEN}"
+        elif is_interactive_shell "$shell"; then
+            if is_system_user "$uid"; then
+                interactive_service=$((interactive_service + 1))
+                flagged=$((flagged + 1))
+                status="⚠ FLAGGED"
+                status_color="${RED}"
+            else
+                status="ACTIVE"
+                status_color="${BLUE}"
+            fi
+        else
+            status="UNKNOWN"
+            status_color="${YELLOW}"
+        fi
+
+        # Check if home directory exists
+        if [[ ! -d "$home" ]] && [[ "$home" != "/" ]]; then
+            no_home=$((no_home + 1))
+        fi
+
+        # Skip non-flagged if --flagged is set
+        if $flagged_only && [[ "$status" != "⚠ FLAGGED" ]]; then
+            continue
+        fi
+
+        local last_login
+        last_login=$(get_last_login "$username")
+
+        case "$output_format" in
+            table)
+                printf "%-20s %-8s %-8s %-25s %-15s ${status_color}%-10s${NC}\n" \
+                    "$username" "$uid" "$gid" "$shell" "$last_login" "$status"
+                ;;
+            json)
+                echo "{\"username\":\"$username\",\"uid\":$uid,\"gid\":$gid,\"shell\":\"$shell\",\"home\":\"$home\",\"last_login\":\"$last_login\",\"status\":\"$status\"}"
+                ;;
+            csv)
+                echo "$username,$uid,$gid,$shell,$home,$last_login,$status"
+                ;;
+        esac
+
+    done < "$PASSWD_FILE"
+
+    if [[ "$output_format" == "table" ]]; then
+        echo
+        printf '%.0s─' {1..90}
+        echo
+        log_header "Summary"
+        echo -e "  ${BOLD}Total accounts scanned:${NC}     $total"
+        echo -e "  ${GREEN}Non-interactive (secure):${NC}   $non_interactive"
+        echo -e "  ${RED}Flagged (review needed):${NC}    $flagged"
+        echo -e "  ${YELLOW}Missing home directory:${NC}    $no_home"
+        echo
+
+        if [[ $flagged -gt 0 ]]; then
+            log_warn "Found $flagged service account(s) with interactive shells."
+            log_warn "Run '${SCRIPT_NAME} restrict --auto' to enforce non-interactive shells."
+        else
+            log_success "All service accounts have appropriate shell restrictions."
+        fi
+    fi
+}
+
+audit_usage() {
+    cat <<EOF
+Usage: $SCRIPT_NAME audit [OPTIONS]
+
+Audit user accounts and service account shell configurations.
+
+Options:
+  -a, --all          Show all accounts (including system)
+  -s, --shell SHELL  Filter by shell path (partial match)
+  -f, --format FMT   Output format: table (default), json, csv
+  --min-uid UID      Minimum UID to scan (default: 0)
+  --max-uid UID      Maximum UID to scan (default: 65534)
+  --system           Include system accounts (UID < 1000)
+  --flagged          Show only flagged accounts
+  -h, --help         Show this help
+
+Examples:
+  $SCRIPT_NAME audit                      # Audit regular user accounts
+  $SCRIPT_NAME audit --all                # Include system accounts
+  $SCRIPT_NAME audit --flagged            # Show only security concerns
+  $SCRIPT_NAME audit --shell nologin      # Filter by shell type
+  $SCRIPT_NAME audit --format json        # JSON output for pipelines
+  $SCRIPT_NAME audit --format csv > report.csv
+EOF
+}
+
+# ─────────────────────────────────────────────
+# APPLY Command (Declarative User Provisioning)
+# ─────────────────────────────────────────────
+
+cmd_apply() {
+    local config_file=""
+    local dry_run=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f|--file)    config_file="$2"; shift 2 ;;
+            --dry-run)    dry_run=true; shift ;;
+            --help|-h)    apply_usage; exit 0 ;;
+            *)            log_error "Unknown option: $1"; apply_usage; exit 1 ;;
+        esac
+    done
+
+    if [[ -z "$config_file" ]]; then
+        log_error "Config file required. Use -f <file.yaml>"
+        exit 1
+    fi
+
+    if [[ ! -f "$config_file" ]]; then
+        log_error "Config file not found: $config_file"
+        exit 1
+    fi
+
+    if ! $dry_run; then
+        check_root
+    fi
+
+    log_header "User Provisioning — $(basename "$config_file")"
+
+    if $dry_run; then
+        echo -e "${YELLOW}[DRY RUN] No changes will be made.${NC}\n"
+    fi
+
+    local created=0
+    local updated=0
+    local skipped=0
+    local errors=0
+
+    # Parse simple YAML-like config (username: shell: groups: state:)
+    local current_user="" current_shell="" current_groups="" current_state="" current_comment=""
+
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # Skip comments and empty lines
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// /}" ]] && continue
+
+        # Detect user block start (lines starting with "- username:")
+        if [[ "$line" =~ ^[[:space:]]*-[[:space:]]*username:[[:space:]]*(.+) ]]; then
+            # Process previous user if exists
+            if [[ -n "$current_user" ]]; then
+                _provision_user "$current_user" "$current_shell" "$current_groups" "$current_state" "$current_comment" "$dry_run" \
+                    && { [[ $? -eq 0 ]] && created=$((created + 1)); } \
+                    || errors=$((errors + 1))
+            fi
+            current_user="${BASH_REMATCH[1]// /}"
+            current_shell="/sbin/nologin"
+            current_groups=""
+            current_state="present"
+            current_comment=""
+            continue
+        fi
+
+        if [[ "$line" =~ ^[[:space:]]*shell:[[:space:]]*(.+) ]]; then
+            current_shell="${BASH_REMATCH[1]// /}"
+        elif [[ "$line" =~ ^[[:space:]]*groups:[[:space:]]*(.+) ]]; then
+            current_groups="${BASH_REMATCH[1]// /}"
+        elif [[ "$line" =~ ^[[:space:]]*state:[[:space:]]*(.+) ]]; then
+            current_state="${BASH_REMATCH[1]// /}"
+        elif [[ "$line" =~ ^[[:space:]]*comment:[[:space:]]*(.+) ]]; then
+            current_comment="${BASH_REMATCH[1]}"
+        fi
+
+    done < "$config_file"
+
+    # Process the last user in file
+    if [[ -n "$current_user" ]]; then
+        _provision_user "$current_user" "$current_shell" "$current_groups" "$current_state" "$current_comment" "$dry_run" \
+            && created=$((created + 1)) \
+            || errors=$((errors + 1))
+    fi
+
+    echo
+    log_header "Provisioning Summary"
+    echo -e "  ${GREEN}Created/Updated:${NC}  $created"
+    echo -e "  ${YELLOW}Skipped:${NC}          $skipped"
+    echo -e "  ${RED}Errors:${NC}           $errors"
+}
+
+_provision_user() {
+    local username="$1" shell="$2" groups="$3" state="$4" comment="$5" dry_run="$6"
+
+    if [[ "$state" == "absent" ]]; then
+        if id "$username" &>/dev/null; then
+            if [[ "$dry_run" == "true" ]]; then
+                log_warn "[DRY RUN] Would remove user: $username"
+            else
+                userdel -r "$username" 2>/dev/null && log_success "Removed user: $username" || log_error "Failed to remove: $username"
+            fi
+        else
+            log_info "User $username already absent. Skipping."
+        fi
+        return 0
+    fi
+
+    if id "$username" &>/dev/null; then
+        # User exists — check if update needed
+        local current_shell
+        current_shell=$(getent passwd "$username" | cut -d: -f7)
+        if [[ "$current_shell" != "$shell" ]]; then
+            if [[ "$dry_run" == "true" ]]; then
+                log_warn "[DRY RUN] Would update $username shell: $current_shell → $shell"
+            else
+                usermod -s "$shell" "$username" && log_success "Updated $username shell → $shell" || log_error "Failed to update $username"
+            fi
+        else
+            log_info "User $username already configured correctly. Skipping."
+        fi
+
+        # Update groups if specified
+        if [[ -n "$groups" ]]; then
+            if [[ "$dry_run" == "true" ]]; then
+                log_warn "[DRY RUN] Would set $username groups: $groups"
+            else
+                usermod -aG "$groups" "$username" 2>/dev/null && log_success "Updated $username groups → $groups"
+            fi
+        fi
+    else
+        # Create new user
+        local cmd="useradd -s $shell"
+        [[ -n "$groups" ]] && cmd="$cmd -G $groups"
+        [[ -n "$comment" ]] && cmd="$cmd -c \"$comment\""
+        cmd="$cmd $username"
+
+        if [[ "$dry_run" == "true" ]]; then
+            log_warn "[DRY RUN] Would create user: $cmd"
+        else
+            eval "$cmd" && log_success "Created user: $username (shell: $shell)" || { log_error "Failed to create: $username"; return 1; }
+        fi
+    fi
+    return 0
+}
+
+apply_usage() {
+    cat <<EOF
+Usage: $SCRIPT_NAME apply -f <config.yaml> [OPTIONS]
+
+Provision users declaratively from a YAML config file.
+
+Options:
+  -f, --file FILE    Path to user config YAML (required)
+  --dry-run          Preview changes without applying
+  -h, --help         Show this help
+
+Config format (users.yaml):
+  - username: kirsty
+    shell: /sbin/nologin
+    groups: backup,monitoring
+    state: present
+    comment: Backup service agent
+
+  - username: deploy-bot
+    shell: /bin/false
+    state: present
+
+  - username: old-user
+    state: absent
+
+Examples:
+  $SCRIPT_NAME apply -f users.yaml              # Apply user config
+  $SCRIPT_NAME apply -f users.yaml --dry-run    # Preview changes
+EOF
+}
+
+# ─────────────────────────────────────────────
+# DIFF Command
+# ─────────────────────────────────────────────
+
+cmd_diff() {
+    local config_file=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f|--file)    config_file="$2"; shift 2 ;;
+            --help|-h)    diff_usage; exit 0 ;;
+            *)            log_error "Unknown option: $1"; diff_usage; exit 1 ;;
+        esac
+    done
+
+    if [[ -z "$config_file" ]]; then
+        log_error "Config file required. Use -f <file.yaml>"
+        exit 1
+    fi
+
+    # Reuse apply with dry-run
+    cmd_apply -f "$config_file" --dry-run
+}
+
+diff_usage() {
+    cat <<EOF
+Usage: $SCRIPT_NAME diff -f <config.yaml>
+
+Preview what changes would be made without actually applying them.
+(Shortcut for: $SCRIPT_NAME apply -f <config.yaml> --dry-run)
+
+Options:
+  -f, --file FILE    Path to user config YAML (required)
+  -h, --help         Show this help
+EOF
+}
+
+# ─────────────────────────────────────────────
+# RESTRICT Command
+# ─────────────────────────────────────────────
+
+cmd_restrict() {
+    local auto=false
+    local target_shell="/sbin/nologin"
+    local uid_threshold=1000
+    local exclude_users=("root")
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --auto)           auto=true; shift ;;
+            --shell|-s)       target_shell="$2"; shift 2 ;;
+            --uid-below)      uid_threshold="$2"; shift 2 ;;
+            --exclude|-e)     IFS=',' read -ra exclude_users <<< "$2"; shift 2 ;;
+            --help|-h)        restrict_usage; exit 0 ;;
+            *)                log_error "Unknown option: $1"; restrict_usage; exit 1 ;;
+        esac
+    done
+
+    if $auto; then
+        check_root
+    fi
+
+    log_header "Shell Restriction Enforcement"
+
+    local flagged=0
+    local fixed=0
+
+    while IFS=: read -r username _ uid _ _ _ shell; do
+        # Only check system/service accounts (UID < threshold)
+        [[ "$uid" -ge "$uid_threshold" ]] && continue
+
+        # Skip excluded users
+        local skip=false
+        for exc in "${exclude_users[@]}"; do
+            [[ "$username" == "$exc" ]] && skip=true && break
+        done
+        $skip && continue
+
+        # Check if shell is interactive (security concern)
+        if is_interactive_shell "$shell"; then
+            flagged=$((flagged + 1))
+            if $auto; then
+                usermod -s "$target_shell" "$username" 2>/dev/null
+                if [[ $? -eq 0 ]]; then
+                    fixed=$((fixed + 1))
+                    log_success "Restricted $username: $shell → $target_shell"
+                else
+                    log_error "Failed to restrict $username"
+                fi
+            else
+                log_warn "FLAGGED: $username (UID: $uid) has interactive shell: $shell"
+            fi
+        fi
+    done < "$PASSWD_FILE"
+
+    echo
+    if [[ $flagged -eq 0 ]]; then
+        log_success "No service accounts with interactive shells found. System is clean."
+    elif ! $auto; then
+        log_warn "Found $flagged service account(s) with interactive shells."
+        echo -e "\n  Run '${BOLD}sudo $SCRIPT_NAME restrict --auto${NC}' to enforce restrictions."
+        echo -e "  Or use '${BOLD}--exclude root,daemon${NC}' to skip specific accounts."
+    else
+        log_header "Restriction Summary"
+        echo -e "  ${YELLOW}Flagged:${NC}  $flagged"
+        echo -e "  ${GREEN}Fixed:${NC}    $fixed"
+        echo -e "  ${RED}Failed:${NC}   $((flagged - fixed))"
+    fi
+}
+
+restrict_usage() {
+    cat <<EOF
+Usage: $SCRIPT_NAME restrict [OPTIONS]
+
+Scan and enforce non-interactive shells on service accounts.
+
+Options:
+  --auto              Automatically fix flagged accounts (requires sudo)
+  -s, --shell SHELL   Target shell for restriction (default: /sbin/nologin)
+  --uid-below UID     UID threshold for service accounts (default: 1000)
+  -e, --exclude LIST  Comma-separated usernames to skip (default: root)
+  -h, --help          Show this help
+
+Examples:
+  $SCRIPT_NAME restrict                          # Scan and report
+  sudo $SCRIPT_NAME restrict --auto              # Auto-fix violations
+  sudo $SCRIPT_NAME restrict --auto --exclude root,daemon
+  sudo $SCRIPT_NAME restrict --shell /bin/false  # Use /bin/false instead
+EOF
+}
+
+# ─────────────────────────────────────────────
+# REPORT Command (Compliance Report)
+# ─────────────────────────────────────────────
+
+cmd_report() {
+    local output_file=""
+    local format="text"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -o|--output)   output_file="$2"; shift 2 ;;
+            -f|--format)   format="$2"; shift 2 ;;
+            --help|-h)     report_usage; exit 0 ;;
+            *)             log_error "Unknown option: $1"; report_usage; exit 1 ;;
+        esac
+    done
+
+    local report=""
+
+    report+="═══════════════════════════════════════════════════\n"
+    report+="  USERCTL COMPLIANCE REPORT\n"
+    report+="  Generated: $(date '+%Y-%m-%d %H:%M:%S %Z')\n"
+    report+="  Hostname:  $(hostname)\n"
+    report+="  Kernel:    $(uname -r)\n"
+    report+="═══════════════════════════════════════════════════\n\n"
+
+    # Count categories
+    local total=0 service=0 regular=0 nologin=0 flagged=0 locked=0
+
+    while IFS=: read -r username password uid gid gecos home shell; do
+        total=$((total + 1))
+        if is_system_user "$uid"; then
+            service=$((service + 1))
+            if is_interactive_shell "$shell" && [[ "$username" != "root" ]]; then
+                flagged=$((flagged + 1))
+            fi
+        else
+            regular=$((regular + 1))
+        fi
+        is_non_interactive_shell "$shell" && nologin=$((nologin + 1))
+    done < "$PASSWD_FILE"
+
+    report+="ACCOUNT OVERVIEW\n"
+    report+="  Total accounts:           $total\n"
+    report+="  System/Service (UID<1000): $service\n"
+    report+="  Regular users (UID≥1000):  $regular\n"
+    report+="  Non-interactive shells:    $nologin\n\n"
+
+    report+="SECURITY FINDINGS\n"
+    if [[ $flagged -gt 0 ]]; then
+        report+="  ⚠ CRITICAL: $flagged service account(s) have interactive shells\n"
+        report+="  Recommendation: Run 'sudo userctl restrict --auto'\n\n"
+        report+="  Affected accounts:\n"
+        while IFS=: read -r username _ uid _ _ _ shell; do
+            if is_system_user "$uid" && is_interactive_shell "$shell" && [[ "$username" != "root" ]]; then
+                report+="    - $username (UID: $uid, Shell: $shell)\n"
+            fi
+        done < "$PASSWD_FILE"
+    else
+        report+="  ✓ All service accounts have non-interactive shells\n"
+    fi
+
+    report+="\nCOMPLIANCE STATUS\n"
+    if [[ $flagged -eq 0 ]]; then
+        report+="  Status: COMPLIANT ✓\n"
+        report+="  All service accounts follow least-privilege shell policy.\n"
+    else
+        report+="  Status: NON-COMPLIANT ✗\n"
+        report+="  Action required: Restrict interactive shells on service accounts.\n"
+    fi
+
+    if [[ -n "$output_file" ]]; then
+        echo -e "$report" > "$output_file"
+        log_success "Report saved to: $output_file"
+    else
+        echo -e "$report"
+    fi
+}
+
+report_usage() {
+    cat <<EOF
+Usage: $SCRIPT_NAME report [OPTIONS]
+
+Generate a compliance report for user account security.
+
+Options:
+  -o, --output FILE   Save report to file (default: stdout)
+  -f, --format FMT    Report format: text (default), json
+  -h, --help          Show this help
+
+Examples:
+  $SCRIPT_NAME report                        # Print to terminal
+  $SCRIPT_NAME report -o audit-report.txt    # Save to file
+EOF
+}
+
+# ─────────────────────────────────────────────
+# VERSION & HELP
+# ─────────────────────────────────────────────
+
+cmd_version() {
+    echo -e "${BOLD}${SCRIPT_NAME}${NC} version ${VERSION}"
+    echo "Linux User & Service Account Management Toolkit"
+    echo "https://github.com/saharshpamecha/userctl"
+}
+
+cmd_help() {
+    cat <<EOF
+
+${BOLD}${CYAN}userctl${NC} — Linux User & Service Account Management Toolkit v${VERSION}
+
+${BOLD}USAGE${NC}
+  $SCRIPT_NAME <command> [options]
+
+${BOLD}COMMANDS${NC}
+  ${GREEN}audit${NC}       Audit service accounts and shell configurations
+  ${GREEN}apply${NC}       Provision users declaratively from YAML config
+  ${GREEN}diff${NC}        Preview changes before applying (dry-run)
+  ${GREEN}restrict${NC}    Enforce non-interactive shells on service accounts
+  ${GREEN}report${NC}      Generate compliance report
+
+${BOLD}GLOBAL OPTIONS${NC}
+  -h, --help      Show help for any command
+  -v, --version   Show version
+
+${BOLD}EXAMPLES${NC}
+  $SCRIPT_NAME audit --all                     # Full audit
+  $SCRIPT_NAME audit --flagged                 # Security concerns only
+  $SCRIPT_NAME apply -f users.yaml             # Provision users
+  $SCRIPT_NAME diff -f users.yaml              # Preview changes
+  sudo $SCRIPT_NAME restrict --auto            # Auto-fix violations
+  $SCRIPT_NAME report -o compliance.txt        # Compliance report
+
+${BOLD}QUICK START${NC}
+  1. Audit current state:     $SCRIPT_NAME audit --all
+  2. Define desired state:    Create users.yaml
+  3. Preview changes:         $SCRIPT_NAME diff -f users.yaml
+  4. Apply configuration:     sudo $SCRIPT_NAME apply -f users.yaml
+  5. Enforce restrictions:    sudo $SCRIPT_NAME restrict --auto
+  6. Generate report:         $SCRIPT_NAME report
+
+EOF
+}
+
+# ─────────────────────────────────────────────
+# Main Entry Point
+# ─────────────────────────────────────────────
+
+main() {
+    if [[ $# -eq 0 ]]; then
+        cmd_help
+        exit 0
+    fi
+
+    local command="$1"
+    shift
+
+    case "$command" in
+        audit)      cmd_audit "$@" ;;
+        apply)      cmd_apply "$@" ;;
+        diff)       cmd_diff "$@" ;;
+        restrict)   cmd_restrict "$@" ;;
+        report)     cmd_report "$@" ;;
+        version|-v|--version)  cmd_version ;;
+        help|-h|--help)        cmd_help ;;
+        *)
+            log_error "Unknown command: $command"
+            cmd_help
+            exit 1
+            ;;
+    esac
+}
+
+main "$@"

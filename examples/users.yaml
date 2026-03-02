@@ -1,0 +1,35 @@
+# userctl - Example User Configuration
+# Define your desired user state declaratively.
+# Run: userctl apply -f users.yaml
+# Preview: userctl diff -f users.yaml
+
+# Backup service agent — non-interactive, restricted
+- username: kirsty
+  shell: /sbin/nologin
+  groups: backup,monitoring
+  state: present
+  comment: Backup service agent
+
+# CI/CD deployment bot — no login access
+- username: deploy-bot
+  shell: /bin/false
+  groups: docker,deploy
+  state: present
+  comment: CI/CD deployment runner
+
+# Monitoring daemon account
+- username: prometheus-agent
+  shell: /sbin/nologin
+  groups: monitoring
+  state: present
+  comment: Prometheus node exporter
+
+# Decommissioned user — remove from system
+- username: old-contractor
+  state: absent
+
+# Log rotation service
+- username: logrotate-svc
+  shell: /usr/sbin/nologin
+  state: present
+  comment: Log rotation service account

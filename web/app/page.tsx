@@ -109,7 +109,7 @@ export default function Home() {
         <div className="relative max-w-4xl mx-auto text-center">
           <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#06d6a0]/10 border border-[#06d6a0]/20 text-[#06d6a0] text-xs font-medium mb-8">
             <Zap className="w-3 h-3" />
-            Day 1 of 100 Days of DevOps — Open Source
+            Open Source — Linux Security Toolkit
           </div>
 
           <h1 className="text-5xl md:text-7xl font-bold tracking-tight mb-6">
@@ -359,9 +359,16 @@ export default function Home() {
             </span>
           </div>
           <div className="flex items-center gap-6 text-sm text-[#64748b]">
-            <span>Day 1 of #100DaysOfDevOps</span>
             <a
-              href="https://github.com/saharshpamecha/userctl"
+              href="https://www.linkedin.com/in/saharsh-pamecha-6219961b7/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-[#06d6a0] transition-colors"
+            >
+              LinkedIn
+            </a>
+            <a
+              href="https://github.com/SaharshPamecha/userctl"
               target="_blank"
               rel="noopener noreferrer"
               className="hover:text-[#06d6a0] transition-colors"

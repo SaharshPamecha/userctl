@@ -195,7 +195,7 @@ userctl report -o /var/log/userctl-compliance-$(date +%Y%m%d).txt
 ## Project Structure
 
 ```
-day-01/
+userctl/
 ├── cli/
 │   └── userctl              # The CLI tool (Bash)
 ├── web/                     # Interactive web demo (Next.js)
@@ -225,7 +225,7 @@ day-01/
 
 ## Contributing
 
-Contributions welcome! This is Day 1 of a 100-day open-source DevOps series.
+Contributions welcome!
 
 1. Fork the repo
 2. Create your feature branch (`git checkout -b feature/amazing-feature`)
@@ -251,6 +251,5 @@ MIT License — see [LICENSE](LICENSE) for details.
 **Saharsh Pamecha** — Staff Engineer | DevOps • Data • AI
 
 - X: [@SaharshPamecha1](https://x.com/SaharshPamecha1)
-- GitHub: [saharshpamecha](https://github.com/saharshpamecha)
-
-Part of the [#100DaysOfDevOps](https://kodekloud.com/100-days-of-devops) challenge — Day 1.
+- LinkedIn: [Saharsh Pamecha](https://www.linkedin.com/in/saharsh-pamecha-6219961b7/)
+- GitHub: [SaharshPamecha](https://github.com/SaharshPamecha)

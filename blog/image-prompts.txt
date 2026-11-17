@@ -1,0 +1,50 @@
+# Image Generation Prompts for Gemini / Banana 2.0
+# Use these for blog header, X post images, LinkedIn featured image
+
+---
+
+## Prompt 1: Blog Header Image (Hashnode)
+
+"A dark, cinematic illustration of a Linux terminal screen with glowing green text showing /sbin/nologin and user account entries. Holographic shield icons floating around the terminal. Deep navy blue and cyan color palette. Tech aesthetic with subtle grid lines. Minimalist, professional, high contrast. 16:9 aspect ratio."
+
+---
+
+## Prompt 2: X/Twitter Post Image (Tool Preview)
+
+"Abstract geometric illustration of a command-line interface with the word 'userctl' in glowing cyan text on a dark terminal background. Small icons representing users, locks, and checkmarks arranged around the terminal. Modern tech aesthetic with gradient from dark blue to black. Clean, sharp, minimalist. Square aspect ratio 1:1."
+
+---
+
+## Prompt 3: LinkedIn Featured Image (Professional)
+
+"Professional illustration showing Linux server security concept. A stylized penguin (Tux) silhouette holding a shield, standing in front of server racks with glowing connection lines. Dark blue background with subtle circuit board patterns. Corporate tech aesthetic suitable for enterprise audience. Sophisticated color palette: deep blue, cyan accents, white highlights. 16:9 aspect ratio."
+
+---
+
+## Prompt 4: Terminal Screenshot Alternative (Product Shot)
+
+Instead of generating, I recommend:
+- Take a screenshot of the web simulator at https://userctl.vercel.app
+- Run: userctl audit --all
+- Screenshot the colorful terminal output with the summary table
+- This shows real product, not AI-generated imagery
+
+---
+
+## Prompt 5: Workflow Diagram (Optional)
+
+"Clean technical diagram showing three connected boxes: AUDIT (magnifying glass icon) → PROVISION (user icon) → RESTRICT (lock icon). Arrows connecting them in a cycle. Dark background with neon cyan and amber accent lines. Minimalist tech diagram style. 16:9 aspect ratio."
+
+---
+
+## My Recommendation
+
+For highest engagement:
+1. **Hashnode blog**: Use Prompt 1 (dark terminal aesthetic)
+2. **X posts**: Use screenshot of your actual terminal (authenticity wins)
+3. **LinkedIn**: Use Prompt 3 (professional, corporate-friendly)
+
+If you generate images, download them and then:
+- Hashnode: Upload as cover image
+- X: Attach to your first tweet
+- LinkedIn: Set as featured image when posting

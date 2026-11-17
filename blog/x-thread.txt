@@ -1,0 +1,71 @@
+# X Thread — userctl Launch
+# Copy-paste each tweet separately. All under 280 chars for free accounts.
+
+---
+
+Tweet 1/6:
+Built a CLI tool for something I keep fixing manually:
+
+Linux service accounts with /bin/bash instead of /sbin/nologin.
+
+Every audit finds them. Every hardening guide says fix them. But no lightweight tool existed to do it at scale.
+
+So I built one.
+
+#DevOps #Linux #OpenSource
+
+---
+
+Tweet 2/6:
+userctl — 3 commands I needed:
+
+• audit — Scan accounts, flag interactive shells
+• apply -f users.yaml — Declarative provisioning
+• restrict — Auto-enforce /sbin/nologin
+
+One Bash script. Zero dependencies. Works everywhere.
+
+---
+
+Tweet 3/6:
+The web simulator is live:
+
+https://userctl.vercel.app
+
+Try all commands without installing. Built a terminal emulator in Next.js so folks can play before they commit.
+
+Full open source:
+https://github.com/SaharshPamecha/userctl
+
+---
+
+Tweet 4/6:
+Real use case I hit this month:
+
+CI pipeline creating service accounts with /bin/bash "just in case."
+
+"Just in case" becomes attack surface. /sbin/nologin is not paranoia — it is table stakes for least privilege.
+
+---
+
+Tweet 5/6:
+Why /sbin/nologin over /bin/false?
+
+• Logs "account not available" — audit trail
+• PAM integration
+• Modern standard (RHEL, Ubuntu)
+
+Small choice. Big difference when SOC2 auditors ask for proof.
+
+---
+
+Tweet 6/6:
+Install in 10 seconds:
+
+curl -sL https://raw.githubusercontent.com/SaharshPamecha/userctl/main/install.sh | bash
+
+Feedback welcome. Contributions appreciated. This is me learning and building in public.
+
+Who else deals with service account hygiene daily? 🚀
+
+#BuildInPublic #LinuxAdmin #Security

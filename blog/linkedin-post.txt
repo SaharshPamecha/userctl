@@ -1,0 +1,54 @@
+# LinkedIn Post — userctl Launch
+
+---
+
+Built something I kept needing but couldn't find: a lightweight CLI to audit and fix Linux service account shells.
+
+The Problem Every Infrastructure Engineer Knows
+
+Over time, every Linux server accumulates service accounts — backup agents, CI runners, monitoring daemons. And inevitably, many end up with interactive shells (/bin/bash) when they should have /sbin/nologin.
+
+It is a small configuration drift that becomes a security gap. Auditors find it. Attackers exploit it. And fixing it across 100+ servers manually is painful.
+
+What I Built: userctl
+
+A single Bash script with three operations I do repeatedly:
+
+• audit — Scan /etc/passwd, flag accounts with interactive shells
+• apply -f users.yaml — Declarative user provisioning (idempotent)
+• restrict — Auto-enforce /sbin/nologin on service accounts
+
+Zero dependencies. Works on any Linux distro. Output as table, JSON, or CSV for CI/CD pipelines.
+
+Why This Matters
+
+/shell choice is not paranoia — it is least-privilege enforcement. A non-interactive shell means:
+
+✓ The account can run processes and access files
+✗ But it can never be used for human login
+
+When SOC2 auditors ask for proof of service account hardening, you want clear logs and consistent enforcement. /sbin/nologin gives you both.
+
+Try It Without Installing
+
+I built a web-based terminal simulator so you can test all commands in the browser:
+→ https://userctl.vercel.app
+
+Open source on GitHub:
+→ https://github.com/SaharshPamecha/userctl
+
+Install in 10 seconds:
+curl -sL https://raw.githubusercontent.com/SaharshPamecha/userctl/main/install.sh | bash
+
+Contributions Welcome
+
+LDAP integration, Kubernetes ServiceAccount auditing, Terraform provider — would love to see this grow with community input. If service account hygiene is a problem you deal with, let me know.
+
+This is part of my journey learning and building in public. Feedback — critical or supportive — is genuinely appreciated.
+
+---
+
+Saharsh Pamecha
+Staff Engineer — DevOps • Data • AI
+
+#DevOps #Linux #Infrastructure #Security #Compliance #OpenSource #ServiceAccounts
